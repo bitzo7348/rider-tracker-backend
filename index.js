@@ -8,11 +8,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. Firebase Admin SDK Initialization
+// 1. Firebase Admin Initialization
 try {
     const serviceAccount = require("./serviceAccountKey.json");
-
-    // Check if already initialized to prevent errors
     if (!admin.apps.length) {
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount)
@@ -24,35 +22,37 @@ try {
 }
 
 const db = admin.firestore();
-const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
-});
 
-// --- 🚀 AUTOMATIC GIG MANAGEMENT ---
+// --- 🚀 IMPROVED AUTO-GIG MANAGEMENT ---
 async function manageGigs() {
     try {
-        console.log("Syncing Gigs...");
         const today = new Date();
+        // Indian format YYYY-MM-DD
         const dateStr = today.toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'});
+        console.log("Current Date for Gigs:", dateStr);
 
-        // Kal ke purane delete karo
+        // A. PURANE DELETE KARO
         const oldGigs = await db.collection('gigs').where('date', '<', dateStr).get();
+        console.log(`Found ${oldGigs.size} old gigs to delete.`);
         if (!oldGigs.empty) {
             let batch = db.batch();
             oldGigs.forEach(doc => batch.delete(doc.ref));
             await batch.commit();
-            console.log("Old Gigs Cleaned! 🗑️");
+            console.log("Old Gigs Deleted Successfully.");
         }
 
-        // Aaj ke create karo agar nahi hain
+        // B. AAJ KE CHECK KARO
         const checkGigs = await db.collection('gigs').where('date', '==', dateStr).get();
+        console.log(`Found ${checkGigs.size} gigs for today (${dateStr}).`);
+
         if (checkGigs.empty) {
+            console.log("No gigs found for today. Creating defaults...");
             const defaultSlots = [
                 { start: "07:00 AM", end: "12:00 PM", inc: 30 },
                 { start: "12:00 PM", end: "05:00 PM", inc: 20 },
                 { start: "06:00 PM", end: "11:00 PM", inc: 50 }
             ];
+
             for (let slot of defaultSlots) {
                 await db.collection('gigs').add({
                     area: "Mundra",
@@ -64,15 +64,19 @@ async function manageGigs() {
                     bookedBy: []
                 });
             }
-            console.log("Today's Gigs Created! ✅");
+            console.log("Gigs created for today!");
+        } else {
+            console.log("Today's gigs already exist. Skipping creation.");
         }
+
     } catch (error) {
-        console.error("ManageGigs Error:", error.message);
+        console.error("ManageGigs Logical Error:", error.message);
     }
 }
 
 // Routes
 app.get('/', async (req, res) => {
+    console.log("Health check triggered. Running Gig Management...");
     await manageGigs();
     res.send("Bitzo Dispatch Server: Active & Managed! 🚀");
 });
@@ -82,12 +86,12 @@ app.post('/dispatch-order', (req, res) => {
     res.status(200).send({ success: true });
 });
 
-// Socket.io Logic
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
+
 io.on('connection', (socket) => {
-    console.log('User Connected:', socket.id);
     socket.on('join_order_room', (orderId) => socket.join(orderId));
     socket.on('send_location', (data) => socket.to(data.orderId).emit('receive_location', data));
-    socket.on('disconnect', () => console.log('User Disconnected'));
 });
 
 const PORT = process.env.PORT || 3000;
