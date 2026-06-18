@@ -82,12 +82,51 @@ app.get('/', async (req, res) => {
     res.send(`<h1>Bitzo Dispatch Server</h1><p>${report}</p>`);
 });
 
-// 3. Admin Dispatch Route
-app.post('/dispatch-order', (req, res) => {
-    const orderData = req.body;
-    console.log("Admin Assigned Order:", orderData);
-    io.emit('new_order_assigned', orderData);
-    res.status(200).send({ success: true });
+// 3. Admin Dispatch Route (Updated to trigger Dynamic Push Alerts & Token Sync) [1]
+app.post('/dispatch-order', async (req, res) => {
+    try {
+        const orderData = req.body;
+        console.log("Admin Assigned Order Webhook:", orderData);
+
+        // A. Broadcast globally via Socket for foreground active riders
+        io.emit('new_order_assigned', orderData);
+
+        // B. Fetch target rider and trigger High-Priority FCM Push Notification [1]
+        const riderId = orderData.riderId;
+        const orderId = orderData.orderId || orderData._id || orderData.id || "000000";
+
+        if (riderId) {
+            const riderDoc = await db.collection('riders').doc(riderId).get();
+
+            if (riderDoc.exists) {
+                const riderData = riderDoc.data();
+                const fcmToken = riderData.fcmToken;
+
+                if (fcmToken) {
+                    // Call the self-contained FCM trigger at the very bottom [1]
+                    await sendNewOrderNotification(fcmToken, {
+                        orderId: orderId,
+                        restaurant: orderData.restaurant || "Bitzo Partner Merchant",
+                        payout: orderData.payout || orderData.riderPayout || 60,
+                        paymentMode: orderData.paymentMode || "PREPAID",
+                        totalAmount: orderData.total_amount || orderData.totalAmount || 0,
+                        restaurantLat: orderData.restaurantLat || orderData.restLat || 22.8420,
+                        restaurantLng: orderData.restaurantLng || orderData.restLng || 69.7250,
+                    });
+                } else {
+                    console.warn(`Rider ${riderId} does not have an FCM token registered in Firestore.`);
+                }
+            } else {
+                console.warn(`Rider document ${riderId} does not exist in Firestore.`);
+            }
+        }
+
+        res.status(200).send({ success: true });
+    } catch (error) {
+        console.error("FCM Dispatch Error in Webhook Router:", error.message);
+        // Respond success: true so the webhook doesn't crash, but report the sync warning log
+        res.status(200).send({ success: true, warning: error.message });
+    }
 });
 
 const server = http.createServer(app);
@@ -106,3 +145,49 @@ server.listen(PORT, () => {
     console.log(`Server running on port ${PORT} 🚀`);
     manageGigs(); // Server start hote hi chal jaye
 });
+
+// =========================================================================
+// 🚨 5. DYNAMIC FULL-SCREEN INTENT ALERT ENGINE (Wakes Lockscreen & Plays Sound)
+// =========================================================================
+Future<void> _completeDeliveryAndAddPayout() async {} // Flutter logic reference placeholder
+
+static Future<void> _completeDelivery() async {} // Flutter logic reference placeholder
+
+async function sendNewOrderNotification(fcmToken, order) {
+  const payload = {
+    token: fcmToken,
+
+    // Data-only payload triggers the background isolate _firebaseMessagingBackgroundHandler safely
+    data: {
+      type: 'NEW_ORDER',
+      orderId: order.orderId.toString(),
+      restaurant: order.restaurant,
+      payout: order.payout.toString(),
+      paymentMode: order.paymentMode,
+      totalAmount: order.totalAmount.toString(),
+      restaurantLat: order.restaurantLat.toString(),
+      restaurantLng: order.restaurantLng.toString(),
+    },
+
+    // Critical for waking up Doze-mode/Locked Android devices immediately [1]
+    android: {
+      priority: 'high',
+    },
+
+    apns: {
+      headers: {
+        'apns-priority': '10',
+        'apns-push-type': 'background',
+      },
+    },
+  };
+
+  try {
+    const response = await admin.messaging().send(payload);
+    console.log(`FCM Alert successfully dispatched! ✅ Message ID: ${response}`);
+    return { success: true, messageId: response };
+  } catch (error) {
+    console.error(`FCM Admin Dispatch Error: 🔴 ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
