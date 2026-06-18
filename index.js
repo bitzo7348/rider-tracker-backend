@@ -52,7 +52,7 @@ async function manageGigs() {
             const defaultSlots = [
                 { start: "10:00 AM", end: "12:00 PM", inc: 0 },
                 { start: "12:00 PM", end: "04:00 PM", inc: 0 },
-                { start: "04:00 PM", end: "07:00 PM", inc: 0 }
+                { start: "04:00 PM", end: "07:00 PM", inc: 0 },
                 { start: "07:00 PM", end: "11:00 PM", inc: 0 }
             ];
             for (let slot of defaultSlots) {
