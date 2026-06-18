@@ -50,9 +50,10 @@ async function manageGigs() {
         const checkGigs = await db.collection('gigs').where('date', '==', dateStr).get();
         if (checkGigs.empty) {
             const defaultSlots = [
-                { start: "07:00 AM", end: "12:00 PM", inc: 30 },
-                { start: "12:00 PM", end: "05:00 PM", inc: 20 },
-                { start: "06:00 PM", end: "11:00 PM", inc: 50 }
+                { start: "10:00 AM", end: "12:00 PM", inc: 0 },
+                { start: "12:00 PM", end: "04:00 PM", inc: 0 },
+                { start: "04:00 PM", end: "07:00 PM", inc: 0 }
+                { start: "07:00 PM", end: "11:00 PM", inc: 0 }
             ];
             for (let slot of defaultSlots) {
                 await db.collection('gigs').add({
