@@ -82,7 +82,7 @@ app.get('/', async (req, res) => {
     res.send(`<h1>Bitzo Dispatch Server</h1><p>${report}</p>`);
 });
 
-// 3. Admin Dispatch Route (Updated to trigger Dynamic Push Alerts & Token Sync) [1]
+// 3. Admin Dispatch Route [1]
 app.post('/dispatch-order', async (req, res) => {
     try {
         const orderData = req.body;
@@ -124,7 +124,6 @@ app.post('/dispatch-order', async (req, res) => {
         res.status(200).send({ success: true });
     } catch (error) {
         console.error("FCM Dispatch Error in Webhook Router:", error.message);
-        // Respond success: true so the webhook doesn't crash, but report the sync warning log
         res.status(200).send({ success: true, warning: error.message });
     }
 });
@@ -147,12 +146,8 @@ server.listen(PORT, () => {
 });
 
 // =========================================================================
-// 🚨 5. DYNAMIC FULL-SCREEN INTENT ALERT ENGINE (Wakes Lockscreen & Plays Sound)
+// 🚨 5. DYNAMIC FULL-SCREEN INTENT ALERT ENGINE (Wakes Lockscreen & Plays Sound) [1]
 // =========================================================================
-Future<void> _completeDeliveryAndAddPayout() async {} // Flutter logic reference placeholder
-
-static Future<void> _completeDelivery() async {} // Flutter logic reference placeholder
-
 async function sendNewOrderNotification(fcmToken, order) {
   const payload = {
     token: fcmToken,
