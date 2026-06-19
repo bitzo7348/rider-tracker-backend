@@ -3,10 +3,14 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const admin = require('firebase-admin');
+const crypto = require('crypto'); // 👈 ADDED: Required for secure Webhook Signature verification
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// 📍 SET YOUR SECURE RAZORPAY WEBHOOK SECRET (Match this in Razorpay Dashboard!)
+const RAZORPAY_WEBHOOK_SECRET = "bitzo_webhook_secret_9988";
 
 // 1. Firebase Admin Initialization
 try {
@@ -23,55 +27,75 @@ try {
 
 const db = admin.firestore();
 
-// --- 🚀 AUTO-GIG MANAGEMENT (Automatic Slots) ---
+// =========================================================================
+// 🚀 UPDATED: AUTO-GIG ROLLING 3-DAY SLOTS ENGINE (Today is kept 100% safe!) [1.1.4]
+// =========================================================================
 async function manageGigs() {
     try {
         const today = new Date();
-        const offset = 5.5 * 60 * 60 * 1000; // India Time Offset
-        const istDate = new Date(today.getTime() + offset);
+        const offset = 5.5 * 60 * 60 * 1000; // India Time (IST) Offset
 
-        const year = istDate.getUTCFullYear();
-        const month = String(istDate.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(istDate.getUTCDate()).padStart(2, '0');
-        const dateStr = `${year}-${month}-${day}`;
+        // Helper function to calculate and format IST dates dynamically [1.1.4]
+        const getISTDateString = (daysOffset) => {
+            const istTime = today.getTime() + offset + (daysOffset * 24 * 60 * 60 * 1000);
+            const d = new Date(istTime);
+            const y = d.getUTCFullYear();
+            const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+            const dateDay = String(d.getUTCDate()).padStart(2, '0');
+            return `${y}-${m}-${dateDay}`;
+        };
 
-        console.log("Checking Gigs for:", dateStr);
+        const todayStr = getISTDateString(0); // 👈 Today's Date
+        const tomorrowStr = getISTDateString(1);
+        const dayAfterStr = getISTDateString(2);
+        const dayAfterAfterStr = getISTDateString(3);
 
-        // Kal ke purane delete karo
-        const oldGigs = await db.collection('gigs').where('date', '<', dateStr).get();
+        console.log(`Syncing Rolling Gigs: Today is ${todayStr}. Active range: ${tomorrowStr} to ${dayAfterAfterStr}`);
+
+        // 1. 🧹 CLEAN-UP: Delete only gigs older than TODAY (Today's active gig remains 100% safe!) [2]
+        const oldGigs = await db.collection('gigs').where('date', '<', todayStr).get();
         if (!oldGigs.empty) {
             let batch = db.batch();
             oldGigs.forEach(doc => batch.delete(doc.ref));
             await batch.commit();
-            console.log("Old Gigs Cleaned.");
+            console.log(`Cleaned old gigs prior to date: ${todayStr} successfully.`);
         }
 
-        // Aaj ke create karo
-        const checkGigs = await db.collection('gigs').where('date', '==', dateStr).get();
-        if (checkGigs.empty) {
-            const defaultSlots = [
-                { start: "10:00 AM", end: "12:00 PM", inc: 0 },
-                { start: "12:00 PM", end: "04:00 PM", inc: 0 },
-                { start: "04:00 PM", end: "07:00 PM", inc: 0 },
-                { start: "07:00 PM", end: "11:00 PM", inc: 0 }
-            ];
-            for (let slot of defaultSlots) {
-                await db.collection('gigs').add({
-                    area: "Mundra",
-                    date: dateStr,
-                    startTime: slot.start,
-                    endTime: slot.end,
-                    incentive: slot.inc,
-                    slotsAvailable: 25,
-                    bookedBy: []
-                });
+        // 2. ➕ GENERATION: Ensure slots exist for Tomorrow, Day After, and Day After After
+        const targetDates = [tomorrowStr, dayAfterStr, dayAfterAfterStr];
+        let createdDates = [];
+
+        for (let dateStr of targetDates) {
+            const checkGigs = await db.collection('gigs').where('date', '==', dateStr).get();
+            if (checkGigs.empty) {
+                const defaultSlots = [
+                    { start: "10:00 AM", end: "12:00 PM", inc: 0 },
+                    { start: "12:00 PM", end: "04:00 PM", inc: 0 },
+                    { start: "04:00 PM", end: "07:00 PM", inc: 0 },
+                    { start: "07:00 PM", end: "11:00 PM", inc: 0 }
+                ];
+                for (let slot of defaultSlots) {
+                    await db.collection('gigs').add({
+                        area: "Mundra",
+                        date: dateStr,
+                        startTime: slot.start,
+                        endTime: slot.end,
+                        incentive: slot.inc,
+                        slotsAvailable: 25,
+                        bookedBy: []
+                    });
+                }
+                createdDates.push(dateStr);
             }
-            console.log("Today's Gigs Created! ✅");
-            return `Gigs created for ${dateStr} ✅`;
         }
-        return `Gigs already exist for ${dateStr} ✅`;
+
+        if (createdDates.length > 0) {
+            console.log(`Gigs successfully auto-created for upcoming dates: ${createdDates.join(', ')} ✅`);
+            return `Gigs created for ${createdDates.join(', ')} ✅`;
+        }
+        return `Rolling gigs for upcoming 3 days are already up-to-date! ✅`;
     } catch (error) {
-        console.error("Gig Error:", error.message);
+        console.error("Auto-Gig Error: 🔴", error.message);
         return "Error: " + error.message;
     }
 }
@@ -125,6 +149,77 @@ app.post('/dispatch-order', async (req, res) => {
     } catch (error) {
         console.error("FCM Dispatch Error in Webhook Router:", error.message);
         res.status(200).send({ success: true, warning: error.message });
+    }
+});
+
+// =========================================================================
+// 🚨 4. SECURE RAZORPAY WEBHOOK RECEIVER (The Ultimate Bank-Level Sync) [1]
+// =========================================================================
+app.post('/razorpay-webhook', async (req, res) => {
+    try {
+        const signature = req.headers['x-razorpay-signature'];
+
+        // 1. Cryptographically verify that the webhook actually came from Razorpay's secure servers!
+        const shasum = crypto.createHmac('sha256', RAZORPAY_WEBHOOK_SECRET);
+        shasum.update(JSON.stringify(req.body));
+        const digest = shasum.digest('hex');
+
+        if (digest !== signature) {
+            console.error("🚨 Webhook Security Alert: Invalid Signature! Request discarded.");
+            return res.status(400).send('Invalid signature');
+        }
+
+        console.log("Verified Webhook Signature successfully! ✅ processing payment...");
+
+        const event = req.body.event;
+
+        // We only process if the payment was successfully captured [1]
+        if (event === 'payment.captured') {
+            const paymentEntity = req.body.payload.payment.entity;
+            const rzpOrderId = paymentEntity.order_id;
+            const paymentId = paymentEntity.id;
+
+            console.log(`Payment captured! ID: ${paymentId} for Razorpay Order: ${rzpOrderId}`);
+
+            // 2. Query Firestore to find the pending order with matching Razorpay Order ID
+            const orderQuery = await db.collection('orders')
+                .where('razorpayOrderId', '==', rzpOrderId)
+                .where('status', '==', 'payment_pending')
+                .limit(1)
+                .get();
+
+            if (!orderQuery.empty) {
+                const orderDoc = orderQuery.docs[0];
+                const orderId = orderDoc.id;
+                const orderData = orderDoc.data();
+
+                // 3. Update order status dynamically in database to "Placed" [1]
+                await db.collection('orders').doc(orderId).update({
+                    status: 'Placed',
+                    paymentStatus: 'Paid',
+                    razorpayPaymentId: paymentId,
+                    verifiedAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+
+                console.log(`Order #${orderId} has been successfully validated and set to "Placed"! 🏆`);
+
+                // 4. AUTO DISPATCH: Broadcast order to the active riders on sockets instantly! [2]
+                io.emit('new_order_assigned', {
+                    ...orderData,
+                    orderId: orderId,
+                    status: 'Placed',
+                    paymentStatus: 'Paid',
+                    razorpayPaymentId: paymentId
+                });
+            } else {
+                console.warn(`No matching pending order found in Firestore for Razorpay Order: ${rzpOrderId}`);
+            }
+        }
+
+        res.status(200).send('ok');
+    } catch (error) {
+        console.error("Razorpay Webhook Error: 🔴", error.message);
+        res.status(500).send(error.message);
     }
 });
 
